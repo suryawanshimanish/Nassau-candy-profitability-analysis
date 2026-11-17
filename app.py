@@ -13,7 +13,7 @@ from plotly.subplots import make_subplots
 
 from analytics import (
     CLEAN_DATA_PATH, DIVISION_COLORS, FACTORY_COORDS, OUTPUT_DIR, PRODUCT_FACTORY, ROOT,
-    concentration_metrics, division_metrics, factory_metrics, monthly_metrics,
+    RAW_DATA_CANDIDATES, concentration_metrics, division_metrics, factory_metrics, load_and_clean, monthly_metrics,
     pareto_table, portfolio_kpis, product_metrics, risk_register, summarize,
 )
 
@@ -60,15 +60,46 @@ st.markdown(
 
 
 @st.cache_data(show_spinner=False)
-def load_clean() -> pd.DataFrame:
-    df = pd.read_csv(CLEAN_DATA_PATH, parse_dates=["order_date", "ship_date", "month"])
-    df["postal_code"] = df["postal_code"].astype("string")
-    return df
+def load_dashboard_data() -> tuple[pd.DataFrame, dict]:
+    report_path = OUTPUT_DIR / "data_quality_report.json"
+    report = None
 
+    if CLEAN_DATA_PATH.is_file():
+        df = pd.read_csv(CLEAN_DATA_PATH, parse_dates=["order_date", "ship_date", "month"])
+        df["postal_code"] = df["postal_code"].astype("string")
+    else:
+        source_path = next((path for path in RAW_DATA_CANDIDATES if path.is_file()), None)
+        if source_path is None:
+            raise FileNotFoundError(
+                f"Neither the cleaned dataset ({CLEAN_DATA_PATH}) nor a source CSV "
+                f"({', '.join(str(path) for path in RAW_DATA_CANDIDATES)}) is available. "
+                "Include one of these data files in the deployed repository."
+            )
+        df, report = load_and_clean(source_path)
 
-@st.cache_data(show_spinner=False)
-def load_json(path: str) -> dict:
-    return json.loads(Path(path).read_text(encoding="utf-8"))
+    if report_path.is_file():
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+    elif report is None:
+        source_path = next((path for path in RAW_DATA_CANDIDATES if path.is_file()), None)
+        if source_path is not None:
+            _, report = load_and_clean(source_path)
+        else:
+            ship_days = pd.to_numeric(df["ship_days"], errors="coerce").dropna()
+            order_id_year = pd.to_numeric(
+                df["order_id"].astype("string").str.extract(r"^[A-Z]{2}-(\d{4})-", expand=False),
+                errors="coerce",
+            )
+            report = {
+                "source_file": str(CLEAN_DATA_PATH),
+                "clean_rows": int(len(df)),
+                "ship_days_min": float(ship_days.min()),
+                "ship_days_median": float(ship_days.median()),
+                "ship_days_max": float(ship_days.max()),
+                "order_id_year_mismatch_rows": int((order_id_year != df["order_date"].dt.year).sum()),
+                "validation_note": "Derived from cleaned data; source validation report was unavailable.",
+            }
+
+    return df, report
 
 
 @st.cache_data(show_spinner=False)
@@ -193,8 +224,7 @@ def download_button(label: str, path: Path, mime: str, key: str) -> None:
 # ---------------------------------------------------------------------------
 # Sidebar and scope
 # ---------------------------------------------------------------------------
-raw = load_clean()
-report = load_json(str(OUTPUT_DIR / "data_quality_report.json"))
+raw, report = load_dashboard_data()
 min_date, max_date = raw["order_date"].min().date(), raw["order_date"].max().date()
 
 st.sidebar.markdown("## Filter the analysis")

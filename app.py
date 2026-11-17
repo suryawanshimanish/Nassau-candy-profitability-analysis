@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from io import BytesIO
 from pathlib import Path
 
 import numpy as np
@@ -13,7 +14,8 @@ from plotly.subplots import make_subplots
 
 from analytics import (
     CLEAN_DATA_PATH, DIVISION_COLORS, FACTORY_COORDS, OUTPUT_DIR, PRODUCT_FACTORY, ROOT,
-    RAW_DATA_CANDIDATES, concentration_metrics, division_metrics, factory_metrics, load_and_clean, monthly_metrics,
+    RAW_DATA_CANDIDATES, concentration_metrics, division_metrics, factory_metrics,
+    load_and_clean, monthly_metrics,
     pareto_table, portfolio_kpis, product_metrics, risk_register, summarize,
 )
 
@@ -60,7 +62,7 @@ st.markdown(
 
 
 @st.cache_data(show_spinner=False)
-def load_dashboard_data() -> tuple[pd.DataFrame, dict]:
+def load_dashboard_data(uploaded_clean_csv: bytes | None = None) -> tuple[pd.DataFrame, dict]:
     report_path = OUTPUT_DIR / "data_quality_report.json"
     report = None
 
@@ -69,15 +71,35 @@ def load_dashboard_data() -> tuple[pd.DataFrame, dict]:
         df["postal_code"] = df["postal_code"].astype("string")
     else:
         source_path = next((path for path in RAW_DATA_CANDIDATES if path.is_file()), None)
-        if source_path is None:
+        if source_path is not None:
+            df, report = load_and_clean(source_path)
+        elif uploaded_clean_csv is not None:
+            df = pd.read_csv(
+                BytesIO(uploaded_clean_csv),
+                parse_dates=["order_date", "ship_date", "month"],
+            )
+            required_columns = {
+                "row_id", "order_id", "order_date", "ship_date", "ship_mode", "customer_id",
+                "country", "city", "state", "postal_code", "division", "region", "product_id",
+                "product_name", "factory", "sales", "units", "gross_profit", "cost",
+                "sales_per_unit", "cost_per_unit", "profit_per_unit", "line_margin_pct", "month",
+                "ship_days",
+            }
+            missing_columns = sorted(required_columns.difference(df.columns))
+            if missing_columns:
+                raise ValueError(
+                    "Upload the cleaned Nassau Candy CSV. It is missing required columns: "
+                    + ", ".join(missing_columns)
+                )
+            df["postal_code"] = df["postal_code"].astype("string")
+        else:
             raise FileNotFoundError(
                 f"Neither the cleaned dataset ({CLEAN_DATA_PATH}) nor a source CSV "
                 f"({', '.join(str(path) for path in RAW_DATA_CANDIDATES)}) is available. "
-                "Include one of these data files in the deployed repository."
+                "Upload the cleaned Nassau Candy CSV to continue."
             )
-        df, report = load_and_clean(source_path)
 
-    if report_path.is_file():
+    if report_path.is_file() and uploaded_clean_csv is None:
         report = json.loads(report_path.read_text(encoding="utf-8"))
     elif report is None:
         source_path = next((path for path in RAW_DATA_CANDIDATES if path.is_file()), None)
@@ -224,7 +246,22 @@ def download_button(label: str, path: Path, mime: str, key: str) -> None:
 # ---------------------------------------------------------------------------
 # Sidebar and scope
 # ---------------------------------------------------------------------------
-raw, report = load_dashboard_data()
+if CLEAN_DATA_PATH.is_file() or any(path.is_file() for path in RAW_DATA_CANDIDATES):
+    raw, report = load_dashboard_data()
+else:
+    st.info("The dataset is not included in this deployment. Upload the cleaned CSV to open the dashboard.")
+    uploaded_file = st.file_uploader(
+        "Cleaned Nassau Candy dataset (CSV)",
+        type=["csv"],
+        help="Choose data/nassau_candy_clean.csv from the project files.",
+    )
+    if uploaded_file is None:
+        st.stop()
+    try:
+        raw, report = load_dashboard_data(uploaded_file.getvalue())
+    except ValueError as error:
+        st.error(str(error))
+        st.stop()
 min_date, max_date = raw["order_date"].min().date(), raw["order_date"].max().date()
 
 st.sidebar.markdown("## Filter the analysis")

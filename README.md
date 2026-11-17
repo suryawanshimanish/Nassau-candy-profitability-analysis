@@ -74,7 +74,6 @@ analytics.py               cleaning, metrics, Pareto, risk, factory functions
 build_deliverables.py      orchestrates every export and document
 figures.py                 static matplotlib figures
 report_builder.py          DOCX + Markdown research paper and executive summary
-build_project_explanation.py  DOCX + Markdown project explanation and presentation content
 data/                      raw copy, clean data, factory reference tables
 outputs/                   CSV, JSON, XLSX and PNG analytical outputs
 .streamlit/config.toml     server and theme configuration
